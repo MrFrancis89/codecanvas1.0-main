@@ -1,6 +1,4 @@
-/* ========== FIREBASE ADAPTER ==========
-   Integração com Firebase Firestore (versão estável e limpa)
-   ===================================== */
+/* ========== FIREBASE ADAPTER (VERSÃO LIMPA) ========== */
 
 const FirebaseAdapter = (() => {
 
@@ -31,48 +29,98 @@ const FirebaseAdapter = (() => {
     if (btnLoad) btnLoad.disabled = !connected;
   };
 
-  const _getConfig = () => {
-    const projectId = _el('fb-project-id')?.value.trim();
-    const apiKey = _el('fb-api-key')?.value.trim();
-
-    if (!projectId || !apiKey) {
-      throw new Error('Preencha Project ID e API Key');
-    }
-
-    return {
-      apiKey,
-      authDomain: `${projectId}.firebaseapp.com`,
-      projectId
-    };
-  };
-
   const connect = async () => {
     try {
       if (typeof firebase === 'undefined') {
         throw new Error('Firebase SDK não carregado');
       }
 
-      const config = _getConfig();
+      const projectId = _el('fb-project-id').value.trim();
+      const apiKey = _el('fb-api-key').value.trim();
+
+      if (!projectId || !apiKey) {
+        throw new Error('Preencha os campos');
+      }
 
       if (!_app) {
-        _app = firebase.initializeApp(config);
+        _app = firebase.initializeApp({
+          apiKey,
+          authDomain: `${projectId}.firebaseapp.com`,
+          projectId
+        });
+
         _db = firebase.firestore();
       }
 
       _setStatus(true);
-      ToastManager.show('Conectado ao Firebase 🚀');
+      ToastManager.show('Firebase conectado 🚀');
 
     } catch (err) {
-      console.error('[Firebase]', err);
-      ToastManager.show('Erro ao conectar Firebase ❌');
+      console.error(err);
+      ToastManager.show('Erro ao conectar ❌');
       _setStatus(false);
     }
   };
 
   const saveToCloud = async () => {
-    if (!_connected || !_db) return;
+    if (!_connected) return;
 
     try {
+      const content = EditorManager.getValue();
+      const filename = FileManager.getFilename();
+      const docName = _el('fb-doc-name').value || 'default';
+
+      await _db.collection('codecanvas').doc(docName).set({
+        content,
+        filename,
+        updatedAt: new Date().toISOString()
+      });
+
+      ToastManager.show('Salvo na nuvem ☁️');
+
+    } catch (err) {
+      console.error(err);
+      ToastManager.show('Erro ao salvar ❌');
+    }
+  };
+
+  const loadFromCloud = async () => {
+    if (!_connected) return;
+
+    try {
+      const docName = _el('fb-doc-name').value || 'default';
+
+      const doc = await _db.collection('codecanvas').doc(docName).get();
+
+      if (!doc.exists) {
+        ToastManager.show('Arquivo não encontrado');
+        return;
+      }
+
+      const data = doc.data();
+
+      EditorManager.setValue(data.content || '');
+      if (data.filename) FileManager.setFilename(data.filename);
+
+      ToastManager.show('Carregado ☁️');
+
+    } catch (err) {
+      console.error(err);
+      ToastManager.show('Erro ao carregar ❌');
+    }
+  };
+
+  const initPanel = () => {
+    _el('fb-connect')?.addEventListener('click', connect);
+    _el('fb-save-cloud')?.addEventListener('click', saveToCloud);
+    _el('fb-load-cloud')?.addEventListener('click', loadFromCloud);
+
+    _setStatus(false);
+  };
+
+  return { initPanel };
+
+})();    try {
       const content = EditorManager.getValue();
       const filename = FileManager.getFilename() || 'arquivo';
       const docName = _el('fb-doc-name')?.value || 'default';
