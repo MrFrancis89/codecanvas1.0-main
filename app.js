@@ -1,22 +1,17 @@
-/* ========== APP (ORQUESTRADOR PRINCIPAL) ==========
-   Inicializa todos os módulos, carrega dados persistidos,
-   gerencia migração do localStorage e eventos da UI.
-   ================================================= */
+/* ========== APP (ORQUESTRADOR PRINCIPAL) ========== */
 
 const App = (() => {
 
-  // Helper seguro para eventos (evita quebra se elemento não existir)
   const safeAddEvent = (id, event, handler) => {
     const el = document.getElementById(id);
     if (!el) {
-      console.warn(`[App] Elemento #${id} não encontrado — evento ignorado`);
+      console.warn(`[App] Elemento #${id} não encontrado`);
       return;
     }
     el.addEventListener(event, handler);
   };
 
   const _initEvents = () => {
-    // Toolbar
     safeAddEvent('btn-new', 'click', () => FileManager.newFile());
     safeAddEvent('btn-open', 'click', () => FileManager.importFile());
     safeAddEvent('btn-save', 'click', () => FileManager.exportFile());
@@ -26,15 +21,11 @@ const App = (() => {
     safeAddEvent('btn-theme', 'click', () => ThemeManager.toggle());
     safeAddEvent('filename-chip', 'click', () => FileManager.renameFile());
 
-    // Firebase panel toggle
     safeAddEvent('btn-firebase', 'click', () => {
       const panel = document.getElementById('firebase-panel');
       const findPanel = document.getElementById('find-panel');
 
-      if (!panel) {
-        console.warn('[App] #firebase-panel não encontrado');
-        return;
-      }
+      if (!panel) return;
 
       const isOpen = panel.classList.contains('open');
       panel.classList.toggle('open', !isOpen);
@@ -45,11 +36,9 @@ const App = (() => {
     });
 
     safeAddEvent('firebase-close', 'click', () => {
-      const panel = document.getElementById('firebase-panel');
-      if (panel) panel.classList.remove('open');
+      document.getElementById('firebase-panel')?.classList.remove('open');
     });
 
-    // Atalhos globais
     document.addEventListener('keydown', (e) => {
       const ctrl = e.ctrlKey || e.metaKey;
 
@@ -68,175 +57,91 @@ const App = (() => {
         FindReplaceManager.toggle();
       }
     });
-
-    // Touch fixes (iOS)
-    const toolbar = document.getElementById('toolbar');
-    const statusbar = document.getElementById('statusbar');
-
-    if (toolbar) {
-      toolbar.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-    }
-
-    if (statusbar) {
-      statusbar.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-    }
   };
 
   const init = async () => {
-    ThemeManager.init();
-    ModalManager.init();
+    try {
+      ThemeManager.init();
+      ModalManager.init();
 
-    const { IDB_KEYS } = AppConfig;
+      const { IDB_KEYS } = AppConfig;
 
-    let savedData = await StorageManager.getMany([
-      IDB_KEYS.CONTENT,
-      IDB_KEYS.FILENAME,
-      IDB_KEYS.LANG,
-    ]);
+      const savedData = await StorageManager.getMany([
+        IDB_KEYS.CONTENT,
+        IDB_KEYS.FILENAME,
+        IDB_KEYS.LANG,
+      ]);
 
-    // Migração localStorage → IndexedDB
-    const legacyKeys = {
-      content: 'cc_content',
-      filename: 'cc_filename',
-      lang: 'cc_lang'
-    };
+      LangManager.init();
+      LangManager.setInitialMode(
+        savedData[IDB_KEYS.LANG] || AppConfig.DEFAULT_LANG
+      );
 
-    const needsMigration =
-      !savedData[IDB_KEYS.CONTENT] &&
-      localStorage.getItem(legacyKeys.content);
+      FileManager.init(savedData[IDB_KEYS.FILENAME]);
 
-    if (needsMigration) {
-      console.info('[App] Migrando dados de localStorage → IndexedDB...');
+      await new Promise((res, rej) => {
+        if (window.CodeMirror) return res();
 
-      const migratedData = {
-        [IDB_KEYS.CONTENT]: localStorage.getItem(legacyKeys.content),
-        [IDB_KEYS.FILENAME]: localStorage.getItem(legacyKeys.filename),
-        [IDB_KEYS.LANG]: localStorage.getItem(legacyKeys.lang),
-      };
+        let elapsed = 0;
+        const check = setInterval(() => {
+          elapsed += 50;
 
-      try {
-        await Promise.all([
-          StorageManager.set(IDB_KEYS.CONTENT, migratedData[IDB_KEYS.CONTENT]),
-          StorageManager.set(IDB_KEYS.FILENAME, migratedData[IDB_KEYS.FILENAME]),
-          StorageManager.set(IDB_KEYS.LANG, migratedData[IDB_KEYS.LANG]),
-        ]);
+          if (window.CodeMirror) {
+            clearInterval(check);
+            res();
+          } else if (elapsed >= 10000) {
+            clearInterval(check);
+            rej(new Error('CodeMirror não carregou'));
+          }
+        }, 50);
+      });
 
-        Object.values(legacyKeys).forEach(k => localStorage.removeItem(k));
+      EditorManager.init(savedData[IDB_KEYS.CONTENT]);
+      FindReplaceManager.init();
 
-        savedData = migratedData;
-
-        console.info('[App] Migração concluída com sucesso.');
-      } catch (err) {
-        console.warn('[App] Falha na migração — mantendo localStorage:', err);
-        savedData = migratedData;
+      if (typeof FirebaseAdapter !== 'undefined') {
+        FirebaseAdapter.initPanel();
       }
-    }
 
-    LangManager.init();
-    LangManager.setInitialMode(
-      savedData[IDB_KEYS.LANG] || AppConfig.DEFAULT_LANG
-    );
+      _initEvents();
 
-    FileManager.init(savedData[IDB_KEYS.FILENAME]);
-
-    // Aguarda CodeMirror
-    await new Promise((res, rej) => {
-      if (window.CodeMirror) return res();
-
-      let elapsed = 0;
-
-      const check = setInterval(() => {
-        elapsed += 50;
-
-        if (window.CodeMirror) {
-          clearInterval(check);
-          res();
-        } else if (elapsed >= 10000) {
-          clearInterval(check);
-          rej(new Error('CodeMirror não carregou (timeout).'));
-        }
-      }, 50);
-    }).catch(err => {
-      console.error('[App] Erro crítico:', err.message);
+      FileManager.setDirty(false);
 
       const loading = document.getElementById('loading-screen');
+      const appEl = document.getElementById('app');
 
+      setTimeout(() => {
+        if (loading) {
+          loading.classList.add('fade');
+          setTimeout(() => loading.remove(), 500);
+        }
+
+        if (appEl) {
+          appEl.style.opacity = '1';
+          appEl.style.transition = 'opacity 0.4s ease';
+        }
+
+        EditorManager.focus();
+      }, 400);
+
+    } catch (err) {
+      console.error('[App] ERRO CRÍTICO:', err);
+
+      const loading = document.getElementById('loading-screen');
       if (loading) {
         loading.innerHTML = `
-          <div style="text-align:center;padding:32px;color:#f0f0f8;font-family:sans-serif">
-            <div style="font-size:48px;margin-bottom:16px">⚠️</div>
-            <div style="font-size:20px;font-weight:700;margin-bottom:8px">Falha ao carregar</div>
-            <div style="font-size:14px;color:#a0a0c0;margin-bottom:24px">${err.message}</div>
-            <button onclick="location.reload()" style="background:#6366f1;color:white;border:none;padding:12px 28px;border-radius:10px;font-size:15px;cursor:pointer">Tentar novamente</button>
+          <div style="text-align:center;padding:32px;color:#fff">
+            <h2>Erro ao carregar</h2>
+            <p>${err.message}</p>
+            <button onclick="location.reload()">Recarregar</button>
           </div>
         `;
       }
-
-      throw err;
-    });
-
-    EditorManager.init(savedData[IDB_KEYS.CONTENT]);
-
-    FindReplaceManager.init();
-
-    // Firebase seguro
-    try {
-      if (typeof FirebaseAdapter !== 'undefined') {
-        FirebaseAdapter.initPanel();
-      } else {
-        console.warn('[App] FirebaseAdapter não carregado');
-      }
-    } catch (err) {
-      console.warn('[App] Erro ao inicializar Firebase:', err);
     }
-
-    PWAManager.init();
-
-    _initEvents();
-
-    FileManager.setDirty(false);
-
-    // Auto connect Firebase seguro
-    try {
-      if (typeof FirebaseAdapter !== 'undefined' && FirebaseAdapter.autoConnect) {
-        await FirebaseAdapter.autoConnect();
-      }
-    } catch (err) {
-      console.warn('[App] Firebase autoConnect falhou:', err);
-    }
-
-    // Loading screen
-    const loading = document.getElementById('loading-screen');
-    const appEl = document.getElementById('app');
-
-    setTimeout(() => {
-      if (loading) {
-        loading.classList.add('fade');
-        setTimeout(() => loading.remove(), 500);
-      }
-
-      if (appEl) {
-        appEl.style.opacity = '1';
-        appEl.style.transition = 'opacity 0.4s ease';
-      }
-
-      EditorManager.focus();
-    }, 400);
   };
 
   return { init };
 
 })();
 
-// Inicialização
-document.addEventListener('DOMContentLoaded', () => App.init());sition = 'opacity 0.4s ease';
-      setTimeout(() => loading.remove(), 500);
-      EditorManager.focus();
-    }, 400);
-  };
-
-  return { init };
-})();
-
-// Inicialização após o DOM estar pronto
 document.addEventListener('DOMContentLoaded', () => App.init());
