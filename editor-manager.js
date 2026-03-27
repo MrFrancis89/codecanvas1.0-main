@@ -1,40 +1,84 @@
-/* ========== EDITOR MANAGER ==========
-   Inicializa e gerencia a instância do CodeMirror.
-   Inclui autosave com debounce e pinch-to-zoom corrigido para iOS Safari.
-
-   CORREÇÃO Problema 3:
-     - _updateStatus(): null-guards em todos os getElementById — a função
-       é chamada em cada evento cursorActivity; sem guards, um elemento
-       ausente geraria TypeError em loop contínuo.
-     - _forceHighlight(): usa LangManager.currentResolved() em vez de
-       LangManager.current() — garante que o mode spec resolvido
-       ({ name:'javascript', json:true } etc.) seja sempre passado ao
-       CodeMirror, corrigindo regressão introduzida no Problema 2.
-   ==================================== */
+/* ========== EDITOR MANAGER ========== */
 
 const EditorManager = (() => {
   let _cm = null;
 
-  // Estado do pinch-to-zoom
-  let _pinchActive = false;
-  let _initialDistance = 0;
-  let _initialFontSize = 0;
-  let _currentFontSize = 16;
-
   const _updateStatus = () => {
     if (!_cm) return;
 
-    // Null-guards: _updateStatus é disparada em cada cursorActivity.
-    // Se qualquer elemento estiver ausente, loga o erro uma única vez
-    // e retorna em vez de lançar TypeError em loop.
     const elLine = document.getElementById('status-line');
     const elCol  = document.getElementById('status-col');
     const elSel  = document.getElementById('status-sel');
     const elSize = document.getElementById('status-size');
-    if (!elLine || !elCol || !elSel || !elSize) {
-      console.error('[EditorManager] Elemento(s) da status bar não encontrados no DOM');
-      return;
-    }
+
+    if (!elLine || !elCol || !elSel || !elSize) return;
+
+    const cursor  = _cm.getCursor();
+    const sel     = _cm.getSelection();
+    const content = _cm.getValue();
+
+    elLine.textContent = cursor.line + 1;
+    elCol.textContent  = cursor.ch + 1;
+    elSel.textContent  = sel.length;
+
+    const bytes = new Blob([content]).size;
+    elSize.textContent = bytes + ' B';
+  };
+
+  // 🔥 CORREÇÃO PRINCIPAL AQUI
+  const _forceHighlight = () => {
+    if (!_cm) return;
+
+    const mode = LangManager.currentResolved();
+
+    _cm.setOption('mode', null);
+    _cm.setOption('mode', mode);
+
+    _cm.setOption(
+      'theme',
+      ThemeManager.current() === 'dark' ? 'one-dark' : 'default'
+    );
+
+    _cm.refresh();
+  };
+
+  const init = (initialContent) => {
+    const textarea = document.getElementById('cm-editor');
+    if (!textarea) return;
+
+    if (initialContent) textarea.value = initialContent;
+
+    _cm = CodeMirror.fromTextArea(textarea, {
+      mode: LangManager.currentResolved(),
+      theme: 'one-dark',
+      lineNumbers: true,
+      tabSize: 2,
+      indentUnit: 2,
+      styleActiveLine: true
+    });
+
+    window._cmEditor = _cm;
+
+    _cm.setSize(null, '100%');
+
+    _cm.on('cursorActivity', _updateStatus);
+
+    // 🔥 Força highlight múltiplas vezes (fix iPhone)
+    _forceHighlight();
+    setTimeout(_forceHighlight, 200);
+    setTimeout(_forceHighlight, 600);
+
+    _updateStatus();
+  };
+
+  return {
+    init,
+    getValue: () => _cm?.getValue() || '',
+    setValue: (v) => _cm?.setValue(v),
+    getCM: () => _cm,
+    focus: () => _cm?.focus()
+  };
+})();    }
 
     const cursor  = _cm.getCursor();
     const sel     = _cm.getSelection();
